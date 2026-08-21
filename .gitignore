@@ -141,3 +141,8 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+
+# assigment explained and tech stack chosen for the project
+assignment.txt
+task.md
