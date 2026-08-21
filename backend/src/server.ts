@@ -16,7 +16,11 @@ const prisma = new PrismaClient();
 const s3 = new S3Client({ region: process.env.AWS_REGION });
 const port = Number(process.env.PORT ?? 4000);
 const bucket = process.env.S3_BUCKET_NAME ?? "";
-const secret = process.env.JWT_SECRET ?? "development-only-secret";
+const secret = process.env.JWT_SECRET;
+
+if (!secret || secret.length < 32) {
+  throw new Error("JWT_SECRET must be set and contain at least 32 characters");
+}
 
 type AuthedRequest = Request & { userId?: string };
 class ApiError extends Error { constructor(public status: number, message: string, public code = "API_ERROR") { super(message); } }
@@ -39,14 +43,29 @@ const auth = (req: AuthedRequest, _res: Response, next: NextFunction) => {
   } catch (error) { next(error instanceof ApiError ? error : new ApiError(401, "Invalid session", "UNAUTHORIZED")); }
 };
 
-const signupSchema = z.object({ name: z.string().trim().min(2).max(80), email: z.string().trim().email(), password: z.string().min(8).max(128) });
+const authSchema = z.object({ email: z.string().trim().email("Enter a valid email address").transform((value) => value.toLowerCase()), password: z.string().min(8, "Password must be at least 8 characters").max(128) });
+const signupSchema = authSchema.extend({ name: z.string().trim().min(2, "Name must be at least 2 characters").max(80, "Name must be 80 characters or fewer") });
 app.post("/api/auth/signup", asyncRoute(async (req, res) => {
   const input = signupSchema.parse(req.body);
-  const exists = await prisma.user.findUnique({ where: { email: input.email.toLowerCase() } });
+  const exists = await prisma.user.findUnique({ where: { email: input.email } });
   if (exists) throw new ApiError(409, "An account with this email already exists", "EMAIL_EXISTS");
-  const user = await prisma.user.create({ data: { name: input.name, email: input.email.toLowerCase(), passwordHash: await bcrypt.hash(input.password, 12) } });
+  const user = await prisma.user.create({ data: { name: input.name, email: input.email, passwordHash: await bcrypt.hash(input.password, 12) } });
   res.cookie("civicert_token", tokenFor(user.id), { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: 604800000 });
   res.status(201).json({ user: { id: user.id, name: user.name, email: user.email } });
+}));
+
+app.post("/api/auth/login", asyncRoute(async (req, res) => {
+  const input = authSchema.parse(req.body);
+  const user = await prisma.user.findUnique({ where: { email: input.email } });
+  if (!user || !(await bcrypt.compare(input.password, user.passwordHash))) throw new ApiError(401, "Email or password is incorrect", "INVALID_CREDENTIALS");
+  res.cookie("civicert_token", tokenFor(user.id), { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: 604800000 });
+  res.json({ user: { id: user.id, name: user.name, email: user.email } });
+}));
+
+app.get("/api/auth/me", auth, asyncRoute(async (req: AuthedRequest, res) => {
+  const user = await prisma.user.findUnique({ where: { id: req.userId }, select: { id: true, name: true, email: true } });
+  if (!user) throw new ApiError(401, "Your account could not be found", "UNAUTHORIZED");
+  res.json({ user });
 }));
 
 app.post("/api/auth/logout", (_req, res) => { res.clearCookie("civicert_token"); res.status(204).send(); });
@@ -64,5 +83,9 @@ app.post("/api/applications/:id/certificate", auth, asyncRoute(async (req: Authe
 }));
 
 app.use((_req, _res, next) => next(new ApiError(404, "Route not found", "NOT_FOUND")));
-app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => { const status = error instanceof ApiError ? error.status : error instanceof z.ZodError ? 400 : 500; res.status(status).json({ error: { message: error instanceof z.ZodError ? "Invalid request data" : error.message, code: error instanceof ApiError ? error.code : "VALIDATION_ERROR" } }); });
+app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
+  const isValidation = error instanceof z.ZodError;
+  const status = error instanceof ApiError ? error.status : isValidation ? 400 : 500;
+  res.status(status).json({ error: { message: isValidation ? "Please check the highlighted fields" : error.message, code: error instanceof ApiError ? error.code : isValidation ? "VALIDATION_ERROR" : "INTERNAL_ERROR", fields: isValidation ? error.issues.reduce<Record<string, string>>((fields, issue) => { const field = issue.path[0]; if (typeof field === "string" && !fields[field]) fields[field] = issue.message; return fields; }, {}) : undefined } });
+});
 app.listen(port, () => console.log(`Civicert API listening on http://localhost:${port}`));
