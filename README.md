@@ -47,6 +47,34 @@ cd frontend && npm run dev
 
 Open http://localhost:3000. The API health check is http://localhost:4000/health.
 
+## Deployed Urls
+
+Backedn: https://certificate-portal-tzri.onrender.com/health
+Frontend: https://certificate-portal-seven.vercel.app/
+
+### Render free plan migration command
+
+If Render does not provide **Pre-Deploy Command** or **Shell** on your plan,
+put the migration in the Render service **Build Command**:
+
+```bash
+npm ci --include=dev && npx prisma generate && npx prisma migrate deploy && npm run build
+```
+
+Set `DATABASE_URL` in Render before deploying. The migration files must be
+committed under `backend/prisma/migrations/`.
+
+For authentication between Vercel and Render, add these Render variables:
+
+```env
+NODE_ENV=production
+FRONTEND_URL=https://certificate-portal-seven.vercel.app
+```
+
+The backend uses an HTTPS `SameSite=None` HTTP-only cookie in this deployed
+configuration. Without the exact Vercel origin in `FRONTEND_URL`, login may
+return `200` while `/api/auth/me` and `/api/applications` return `401`.
+
 ## Infrastructure setup
 
 Follow [docs/aws-setup.md](docs/aws-setup.md) for the exact Neon/PostgreSQL, S3, IAM, SES, environment variable, and deployment steps.
