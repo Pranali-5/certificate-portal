@@ -28,6 +28,7 @@ model Application {
   status         Status     @default(SUBMITTED)
   documents      Document[]
   certificateKey String?
+  submittedAt    DateTime?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
   @@index([userId, createdAt])
