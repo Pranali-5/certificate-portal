@@ -24,6 +24,15 @@ const s3 = new S3Client({ region: process.env.AWS_REGION });
 const port = Number(process.env.PORT ?? 4000);
 const bucket = process.env.S3_BUCKET_NAME ?? '';
 const secret = process.env.JWT_SECRET;
+const isSecureDeployment =
+  process.env.NODE_ENV === 'production' ||
+  process.env.FRONTEND_URL?.startsWith('https://') === true;
+const authCookieOptions = {
+  httpOnly: true,
+  sameSite: isSecureDeployment ? ('none' as const) : ('lax' as const),
+  secure: isSecureDeployment,
+  maxAge: 604800000,
+};
 
 if (!secret || secret.length < 32) {
   throw new Error('JWT_SECRET must be set and contain at least 32 characters');
@@ -93,12 +102,7 @@ app.post(
         passwordHash: await bcrypt.hash(input.password, 12),
       },
     });
-    res.cookie('civicert_token', tokenFor(user.id), {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-      maxAge: 604800000,
-    });
+    res.cookie('civicert_token', tokenFor(user.id), authCookieOptions);
     res.status(201).json({ user: { id: user.id, name: user.name, email: user.email } });
   }),
 );
@@ -110,12 +114,7 @@ app.post(
     const user = await prisma.user.findUnique({ where: { email: input.email } });
     if (!user || !(await bcrypt.compare(input.password, user.passwordHash)))
       throw new ApiError(401, 'Email or password is incorrect', 'INVALID_CREDENTIALS');
-    res.cookie('civicert_token', tokenFor(user.id), {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-      maxAge: 604800000,
-    });
+    res.cookie('civicert_token', tokenFor(user.id), authCookieOptions);
     res.json({ user: { id: user.id, name: user.name, email: user.email } });
   }),
 );
@@ -134,7 +133,7 @@ app.get(
 );
 
 app.post('/api/auth/logout', (_req, res) => {
-  res.clearCookie('civicert_token');
+  res.clearCookie('civicert_token', authCookieOptions);
   res.status(204).send();
 });
 app.get(
