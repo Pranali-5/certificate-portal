@@ -8,7 +8,9 @@
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "format": "prettier --ignore-path ../.prettierignore --write .",
+    "format:check": "prettier --ignore-path ../.prettierignore --check ."
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.821.0",
@@ -30,6 +32,7 @@
     "@types/express": "^5.0.1",
     "@types/jsonwebtoken": "^9.0.9",
     "@types/node": "^22.15.3",
+    "prettier": "^3.9.6",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3"
   }

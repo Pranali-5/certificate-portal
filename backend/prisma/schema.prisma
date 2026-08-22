@@ -3,8 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  url  	    = env("DATABASE_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model User {
@@ -31,6 +31,7 @@ model Application {
   submittedAt    DateTime?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
+
   @@index([userId, createdAt])
 }
 
@@ -43,6 +44,7 @@ model Document {
   originalName  String
   sizeBytes     Int
   uploadedAt    DateTime    @default(now())
+
   @@unique([applicationId, type])
 }
 

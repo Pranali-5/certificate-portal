@@ -1,0 +1,8 @@
+node_modules
+.next
+out
+dist
+coverage
+*.tsbuildinfo
+frontend/next-env.d.ts
+backend/prisma/migrations
