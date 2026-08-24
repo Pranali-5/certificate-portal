@@ -43,9 +43,22 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: User) => void
     event.preventDefault();
     setErrors({});
     setMessage('');
+
+    const validationErrors: AuthErrors = {};
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) validationErrors.email = 'Email address is required';
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail))
+      validationErrors.email = 'Enter a valid email address';
+    if (!password) validationErrors.password = 'Password is required';
+    else if (password.length < 8) validationErrors.password = 'Password must be at least 8 characters';
+    if (Object.keys(validationErrors).length > 0) {
+      setErrors(validationErrors);
+      return;
+    }
+
     setLoading(true);
     try {
-      const body = mode === 'signup' ? { name, email, password } : { email, password };
+      const body = mode === 'signup' ? { name, email: trimmedEmail, password } : { email: trimmedEmail, password };
       const response = await fetch(`${apiUrl}/api/auth/${mode}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
