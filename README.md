@@ -186,6 +186,10 @@ npm ci --include=dev && npx prisma generate && npx prisma migrate deploy && npm 
 - Start command: `npm start`
 - Add all backend environment variables before the first deployment.
 
+### Deployed URLs
+#### Frontend : https://certificate-portal-seven.vercel.app/
+#### Backend : https://certificate-portal-tzri.onrender.com/health
+
 ### Frontend on Vercel
 
 - Root directory: `frontend`
