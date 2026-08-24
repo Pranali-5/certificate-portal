@@ -15,14 +15,17 @@ import {
   HeadObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { randomUUID } from 'node:crypto';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 const app = express();
 const prisma = new PrismaClient();
 const s3 = new S3Client({ region: process.env.AWS_REGION });
+const ses = new SESClient({ region: process.env.AWS_REGION });
 const port = Number(process.env.PORT ?? 4000);
 const bucket = process.env.S3_BUCKET_NAME ?? '';
+const sesFromEmail = process.env.SES_FROM_EMAIL ?? '';
 const secret = process.env.JWT_SECRET;
 const isSecureDeployment =
   process.env.NODE_ENV === 'production' ||
@@ -55,6 +58,57 @@ const asyncRoute =
 const tokenFor = (userId: string) => jwt.sign({ sub: userId }, secret, { expiresIn: '7d' });
 const refFor = () =>
   `PC-${new Date().getFullYear()}-${randomBytes(4).toString('base64url').slice(0, 6).toUpperCase()}`;
+const escapeHtml = (value: string) =>
+  value.replace(
+    /[&<>'"`]/g,
+    (character) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        "'": '&#39;',
+        '"': '&quot;',
+        '`': '&#96;',
+      })[character] ?? character,
+  );
+const sendNotificationEmail = async ({
+  to,
+  subject,
+  name,
+  message,
+}: {
+  to: string;
+  subject: string;
+  name: string;
+  message: string;
+}) => {
+  if (!sesFromEmail) {
+    console.warn('SES_FROM_EMAIL is not configured; email notification skipped');
+    return;
+  }
+  try {
+    const safeName = escapeHtml(name);
+    const safeMessage = escapeHtml(message);
+    await ses.send(
+      new SendEmailCommand({
+        Source: sesFromEmail,
+        Destination: { ToAddresses: [to] },
+        Message: {
+          Subject: { Data: subject, Charset: 'UTF-8' },
+          Body: {
+            Text: { Data: `Hi ${name},\n\n${message}\n\nCivicert`, Charset: 'UTF-8' },
+            Html: {
+              Data: `<p>Hi ${safeName},</p><p>${safeMessage}</p><p>Civicert</p>`,
+              Charset: 'UTF-8',
+            },
+          },
+        },
+      }),
+    );
+  } catch (error) {
+    console.warn('SES notification failed:', error instanceof Error ? error.message : error);
+  }
+};
 
 app.use(cors({ origin: process.env.FRONTEND_URL ?? 'http://localhost:3000', credentials: true }));
 app.use(express.json());
@@ -341,11 +395,28 @@ app.post(
       res.json({ application, message: 'Application already submitted' });
       return;
     }
+    const isFirstSubmission = !application.submittedAt;
+    const submittedAt = application.submittedAt ?? new Date();
+    const updatedApplication = await prisma.application.update({
+      where: { id: application.id },
+      data: { status: 'SUBMITTED', submittedAt },
+    });
+    if (isFirstSubmission) {
+      const user = await prisma.user.findUnique({
+        where: { id: req.userId },
+        select: { email: true },
+      });
+      if (user) {
+        await sendNotificationEmail({
+          to: user.email,
+          subject: `Application ${application.refNumber} submitted`,
+          name: application.fullName,
+          message: `Your provisional certificate application ${application.refNumber} has been received.`,
+        });
+      }
+    }
     res.json({
-      application: await prisma.application.update({
-        where: { id: application.id },
-        data: { status: 'SUBMITTED', submittedAt: new Date() },
-      }),
+      application: updatedApplication,
     });
   }),
 );
@@ -419,6 +490,18 @@ app.post(
       where: { id: application.id },
       data: { certificateKey: key, status: 'COMPLETED' },
     });
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId },
+      select: { email: true },
+    });
+    if (user) {
+      await sendNotificationEmail({
+        to: user.email,
+        subject: `Receipt ${application.refNumber} is ready`,
+        name: application.fullName,
+        message: `Your provisional certificate receipt ${application.refNumber} has been generated and is ready to download from your dashboard.`,
+      });
+    }
     res.json({
       url: await getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: key }), {
         expiresIn: 300,
