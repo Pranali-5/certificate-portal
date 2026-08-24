@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -6,8 +5,6 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { PrismaClient } from '@prisma/client';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import {
   DeleteObjectCommand,
   PutObjectCommand,
@@ -15,100 +12,17 @@ import {
   HeadObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
-import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { randomUUID } from 'node:crypto';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createCertificatePdf } from './services/certificate.js';
+import { sendNotificationEmail } from './services/email.js';
+import { authCookieOptions, bucket, port, prisma, s3, secret } from './config.js';
+import { ApiError, asyncRoute, AuthedRequest, errorHandler } from './errors.js';
 
 const app = express();
-const prisma = new PrismaClient();
-const s3 = new S3Client({ region: process.env.AWS_REGION });
-const ses = new SESClient({ region: process.env.AWS_REGION });
-const port = Number(process.env.PORT ?? 4000);
-const bucket = process.env.S3_BUCKET_NAME ?? '';
-const sesFromEmail = process.env.SES_FROM_EMAIL ?? '';
-const secret = process.env.JWT_SECRET;
-const isSecureDeployment =
-  process.env.NODE_ENV === 'production' ||
-  process.env.FRONTEND_URL?.startsWith('https://') === true;
-const authCookieOptions = {
-  httpOnly: true,
-  sameSite: isSecureDeployment ? ('none' as const) : ('lax' as const),
-  secure: isSecureDeployment,
-  maxAge: 604800000,
-};
-
-if (!secret || secret.length < 32) {
-  throw new Error('JWT_SECRET must be set and contain at least 32 characters');
-}
-
-type AuthedRequest = Request & { userId?: string };
-class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-    public code = 'API_ERROR',
-  ) {
-    super(message);
-  }
-}
-const asyncRoute =
-  (handler: (req: Request, res: Response, next: NextFunction) => Promise<void>) =>
-  (req: Request, res: Response, next: NextFunction) =>
-    handler(req, res, next).catch(next);
 const tokenFor = (userId: string) => jwt.sign({ sub: userId }, secret, { expiresIn: '7d' });
 const refFor = () =>
   `PC-${new Date().getFullYear()}-${randomBytes(4).toString('base64url').slice(0, 6).toUpperCase()}`;
-const escapeHtml = (value: string) =>
-  value.replace(
-    /[&<>'"`]/g,
-    (character) =>
-      ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        "'": '&#39;',
-        '"': '&quot;',
-        '`': '&#96;',
-      })[character] ?? character,
-  );
-const sendNotificationEmail = async ({
-  to,
-  subject,
-  name,
-  message,
-}: {
-  to: string;
-  subject: string;
-  name: string;
-  message: string;
-}) => {
-  if (!sesFromEmail) {
-    console.warn('SES_FROM_EMAIL is not configured; email notification skipped');
-    return;
-  }
-  try {
-    const safeName = escapeHtml(name);
-    const safeMessage = escapeHtml(message);
-    await ses.send(
-      new SendEmailCommand({
-        Source: sesFromEmail,
-        Destination: { ToAddresses: [to] },
-        Message: {
-          Subject: { Data: subject, Charset: 'UTF-8' },
-          Body: {
-            Text: { Data: `Hi ${name},\n\n${message}\n\nCivicert`, Charset: 'UTF-8' },
-            Html: {
-              Data: `<p>Hi ${safeName},</p><p>${safeMessage}</p><p>Civicert</p>`,
-              Charset: 'UTF-8',
-            },
-          },
-        },
-      }),
-    );
-  } catch (error) {
-    console.warn('SES notification failed:', error instanceof Error ? error.message : error);
-  }
-};
 
 app.use(cors({ origin: process.env.FRONTEND_URL ?? 'http://localhost:3000', credentials: true }));
 app.use(express.json());
@@ -443,49 +357,7 @@ app.post(
     }
     if (!bucket)
       throw new ApiError(503, 'File storage is not configured', 'STORAGE_NOT_CONFIGURED');
-    const pdf = await PDFDocument.create();
-    const page = pdf.addPage([595, 842]);
-    const font = await pdf.embedFont(StandardFonts.Helvetica);
-    const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-    page.drawText('CIVICERT', {
-      x: 54,
-      y: 770,
-      size: 24,
-      font: bold,
-      color: rgb(0.05, 0.35, 0.29),
-    });
-    page.drawText('PROVISIONAL CERTIFICATE ACKNOWLEDGMENT', {
-      x: 54,
-      y: 725,
-      size: 12,
-      font: bold,
-      color: rgb(0.92, 0.4, 0.24),
-    });
-    const receiptTimestamp = application.submittedAt ?? application.createdAt;
-    const formattedTimestamp = new Intl.DateTimeFormat('en-IN', {
-      dateStyle: 'long',
-      timeStyle: 'medium',
-      timeZone: 'Asia/Kolkata',
-    }).format(receiptTimestamp);
-    page.drawText(`Reference: ${application.refNumber}`, { x: 54, y: 670, size: 12, font: bold });
-    page.drawText(`Applicant: ${application.fullName}`, { x: 54, y: 635, size: 12, font });
-    page.drawText(`Registration: ${application.regNumber}`, { x: 54, y: 605, size: 12, font });
-    page.drawText(`Submitted (IST): ${formattedTimestamp}`, { x: 54, y: 575, size: 12, font });
-    page.drawText('This document acknowledges receipt of the application details above.', {
-      x: 54,
-      y: 500,
-      size: 11,
-      font,
-    });
-    const key = `certificates/${application.id}-ist.pdf`;
-    await s3.send(
-      new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        Body: Buffer.from(await pdf.save()),
-        ContentType: 'application/pdf',
-      }),
-    );
+    const key = await createCertificatePdf(application, s3, bucket);
     await prisma.application.update({
       where: { id: application.id },
       data: { certificateKey: key, status: 'COMPLETED' },
@@ -511,26 +383,5 @@ app.post(
 );
 
 app.use((_req, _res, next) => next(new ApiError(404, 'Route not found', 'NOT_FOUND')));
-app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
-  const isValidation = error instanceof z.ZodError;
-  const status = error instanceof ApiError ? error.status : isValidation ? 400 : 500;
-  res.status(status).json({
-    error: {
-      message: isValidation ? 'Please check the highlighted fields' : error.message,
-      code:
-        error instanceof ApiError
-          ? error.code
-          : isValidation
-            ? 'VALIDATION_ERROR'
-            : 'INTERNAL_ERROR',
-      fields: isValidation
-        ? error.issues.reduce<Record<string, string>>((fields, issue) => {
-            const field = issue.path[0];
-            if (typeof field === 'string' && !fields[field]) fields[field] = issue.message;
-            return fields;
-          }, {})
-        : undefined,
-    },
-  });
-});
+app.use(errorHandler);
 app.listen(port, () => console.log(`Civicert API listening on http://localhost:${port}`));

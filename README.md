@@ -41,13 +41,20 @@ PostgreSQL         Private S3          Amazon SES
 ## Project structure
 
 ```text
-frontend/                 Next.js App Router application
-backend/src/server.ts     Express API, authentication, uploads, PDF, SES
-backend/prisma/            Prisma schema and database migrations
-docs/aws-setup.md          Neon, S3, IAM, SES, and deployment instructions
-docs/technical-writeup.md  Design rationale and time-box trade-offs
-assignment.txt             Original take-home assignment
-task.md                    Product and implementation brief
+frontend/src/app/page.tsx             Session check and top-level view switch
+frontend/src/components/              Auth, dashboard, form, upload, and shared UI
+frontend/src/lib/api.ts               API URL and secure download helpers
+frontend/src/types.ts                 Shared frontend types
+backend/src/server.ts                 Express app and API route definitions
+backend/src/config.ts                 Environment configuration and shared clients
+backend/src/errors.ts                 API error type and centralized error handler
+backend/src/services/certificate.ts   Server-side PDF generation and S3 upload
+backend/src/services/email.ts         Optional, non-blocking SES notifications
+backend/prisma/                        Prisma schema and database migrations
+docs/aws-setup.md                      Neon, S3, IAM, SES, and deployment instructions
+docs/technical-writeup.md              Design rationale and time-box trade-offs
+assignment.txt                         Original take-home assignment
+task.md                                Product and implementation brief
 ```
 
 ## Before running locally
@@ -191,9 +198,15 @@ See [docs/aws-setup.md](docs/aws-setup.md) for the private S3 policy, SES verifi
 ## Verification
 
 ```bash
+# Backend
 cd backend
 npm run lint
 npm run build
+
+# Frontend
+cd ../frontend
+npm run lint
+npx tsc --noEmit
 ```
 
 My manual smoke test is: sign up, create an application, upload both PDFs, submit it, download the generated receipt, and confirm both SES messages when email is configured.
